@@ -37,9 +37,11 @@ jobs:
             echo "Watermark from last issue: $WATERMARK"
           fi
 
-          COMMITS=$(gh api "repos/$REPO/commits" \
+          DEFAULT_BRANCH=$(gh api "repos/$REPO" --jq '.default_branch')
+          echo "Default branch: $DEFAULT_BRANCH"
+
+          COMMITS=$(gh api "repos/$REPO/commits?sha=$DEFAULT_BRANCH&since=$WATERMARK" \
             --paginate \
-            -f since="$WATERMARK" \
             --jq '.[] | .sha[:7] + " " + (.commit.message | split("\n")[0])' \
             2>/dev/null || true)
 
