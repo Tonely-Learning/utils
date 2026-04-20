@@ -1,0 +1,98 @@
+name: Weekly Work Report
+
+on:
+  schedule:
+    - cron: '0 14 * * 1'   # Every Monday at 9am CT (14:00 UTC)
+  workflow_dispatch:
+
+jobs:
+  report:
+    name: Generate work report
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GH_PAT }}
+
+    steps:
+      - name: Generate and post report
+        run: |
+          set -euo pipefail
+
+          REPOS=("Tonely-Learning/maestro-gen" "Tonely-Learning/tonely")
+          REPORT_REPO="Tonely-Learning/utils"
+          SINCE=$(date -u -d '7 days ago' '+%Y-%m-%dT%H:%M:%SZ')
+          TODAY=$(date '+%Y-%m-%d')
+          WEEK_START=$(date -u -d '7 days ago' '+%b %-d')
+          WEEK_END=$(date '+%b %-d')
+
+          TOTAL_POINTS=0
+          TOTAL_ISSUES=0
+          BODY=""
+
+          for REPO in "${REPOS[@]}"; do
+            REPO_NAME="${REPO##*/}"
+
+            # Fetch issues closed in the last 7 days
+            ISSUES=$(gh issue list -R "$REPO" \
+              --state closed \
+              --limit 100 \
+              --json number,title,closedAt,body \
+              --jq "[.[] | select(.closedAt >= \"$SINCE\")]" 2>/dev/null || echo "[]")
+
+            COUNT=$(echo "$ISSUES" | jq 'length')
+            REPO_POINTS=0
+            TABLE_ROWS=""
+
+            if [ "$COUNT" -gt 0 ]; then
+              while IFS= read -r issue; do
+                NUM=$(echo "$issue"   | jq -r '.number')
+                TITLE=$(echo "$issue" | jq -r '.title')
+                ISSUE_BODY=$(echo "$issue" | jq -r '.body // ""')
+
+                # Parse "Story Points: N" from body, default 3
+                POINTS=$(echo "$ISSUE_BODY" | grep -oP 'Story Points:\s*\K[0-9]+' | head -1 || true)
+                POINTS=${POINTS:-3}
+
+                REPO_POINTS=$((REPO_POINTS + POINTS))
+                URL="https://github.com/$REPO/issues/$NUM"
+                TABLE_ROWS="${TABLE_ROWS}| #${NUM} | ${TITLE} | ${POINTS} | [link](${URL}) |\n"
+              done < <(echo "$ISSUES" | jq -c '.[]')
+            fi
+
+            TOTAL_POINTS=$((TOTAL_POINTS + REPO_POINTS))
+            TOTAL_ISSUES=$((TOTAL_ISSUES + COUNT))
+
+            # Per-repo section
+            BODY="${BODY}## $REPO_NAME\n\n"
+            if [ "$COUNT" -gt 0 ]; then
+              BODY="${BODY}**${COUNT} issue(s) closed — ${REPO_POINTS} story points**\n\n"
+              BODY="${BODY}| # | Title | Points | Link |\n"
+              BODY="${BODY}|---|-------|--------|------|\n"
+              BODY="${BODY}${TABLE_ROWS}\n"
+            else
+              BODY="${BODY}_No issues closed this week._\n\n"
+            fi
+          done
+
+          # Build full issue body
+          ISSUE_BODY="# Work Report: ${WEEK_START} – ${WEEK_END}\n\n"
+          ISSUE_BODY="${ISSUE_BODY}| Metric | Value |\n"
+          ISSUE_BODY="${ISSUE_BODY}|--------|-------|\n"
+          ISSUE_BODY="${ISSUE_BODY}| Issues closed | ${TOTAL_ISSUES} |\n"
+          ISSUE_BODY="${ISSUE_BODY}| Story points | ${TOTAL_POINTS} |\n\n"
+          ISSUE_BODY="${ISSUE_BODY}---\n\n"
+          ISSUE_BODY="${ISSUE_BODY}${BODY}"
+          ISSUE_BODY="${ISSUE_BODY}---\n"
+          ISSUE_BODY="${ISSUE_BODY}_Generated automatically by [work-report.yml](https://github.com/Tonely-Learning/utils/blob/master/.github/workflows/work-report.yml)_"
+
+          # Create the report issue
+          URL=$(gh issue create -R "$REPORT_REPO" \
+            --title "Work Report: ${WEEK_START} – ${WEEK_END} (${TOTAL_POINTS} pts)" \
+            --label "report" \
+            --body "$(printf '%b' "$ISSUE_BODY")" \
+            2>&1 | tail -1)
+
+          echo "Report created: $URL"
+
+      - name: Ensure report label exists
+        run: |
+          gh label create "report" --color "0052cc" -R Tonely-Learning/utils 2>/dev/null || true
