@@ -13,6 +13,9 @@ jobs:
       GH_TOKEN: ${{ secrets.GH_PAT }}
 
     steps:
+      - name: Ensure report label exists
+        run: gh label create "report" --color "0052cc" -R Tonely-Learning/utils 2>/dev/null || true
+
       - name: Generate and post report
         run: |
           set -euo pipefail
@@ -93,6 +96,3 @@ jobs:
 
           echo "Report created: $URL"
 
-      - name: Ensure report label exists
-        run: |
-          gh label create "report" --color "0052cc" -R Tonely-Learning/utils 2>/dev/null || true
