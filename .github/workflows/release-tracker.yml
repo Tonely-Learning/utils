@@ -1,0 +1,92 @@
+name: Release Tracker
+
+on:
+  schedule:
+    - cron: '0 14 * * *'
+  workflow_dispatch:
+
+jobs:
+  track:
+    name: Track ${{ matrix.repo }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        repo:
+          - Tonely-Learning/maestro-gen
+          - Tonely-Learning/tonely
+
+    steps:
+      - name: Run release tracker
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          REPO: ${{ matrix.repo }}
+        run: |
+          set -euo pipefail
+          echo "=== Release Tracker: $REPO ==="
+
+          WATERMARK=$(gh issue list -R "$REPO" \
+            --state all --limit 1 \
+            --json createdAt \
+            --jq '.[0].createdAt // empty' 2>/dev/null || true)
+
+          if [ -z "$WATERMARK" ]; then
+            WATERMARK=$(date -u -d '30 days ago' '+%Y-%m-%dT%H:%M:%SZ')
+            echo "No existing issues — using 30-day lookback: $WATERMARK"
+          else
+            echo "Watermark from last issue: $WATERMARK"
+          fi
+
+          COMMITS=$(gh api "repos/$REPO/commits" \
+            --paginate \
+            -f since="$WATERMARK" \
+            --jq '.[] | .sha[:7] + " " + (.commit.message | split("\n")[0])' \
+            2>/dev/null || true)
+
+          if [ -z "$COMMITS" ]; then
+            echo "No new commits since $WATERMARK — skipping."
+            exit 0
+          fi
+
+          COMMIT_COUNT=$(echo "$COMMITS" | grep -c . || true)
+          echo "Found $COMMIT_COUNT commit(s)"
+
+          if [ "$COMMIT_COUNT" -lt 3 ]; then
+            echo "Fewer than 3 commits — not enough to log yet."
+            exit 0
+          fi
+
+          for label in "completed:#0e8a16" "claude:#6f42c1" "feature:#0075ca" "bug:#d73a4a" "infrastructure:#e4e669"; do
+            name="${label%%:*}"
+            color="${label##*:}"
+            gh label create "$name" --color "$color" -R "$REPO" 2>/dev/null || true
+          done
+
+          FEAT=$(echo "$COMMITS" | grep -iE '^[a-f0-9]+ (feat|feature|add|implement|new|support)' || true)
+          FIX=$(echo  "$COMMITS" | grep -iE '^[a-f0-9]+ (fix|bug|patch|hotfix|revert|resolve)' || true)
+          INFRA=$(echo "$COMMITS" | grep -iE '^[a-f0-9]+ (chore|ci|build|refactor|docs|infra|setup|config|test|update|upgrade|bump|lint|format)' || true)
+          OTHER=$(echo "$COMMITS" | grep -ivE '^[a-f0-9]+ (feat|feature|add|implement|new|support|fix|bug|patch|hotfix|revert|resolve|chore|ci|build|refactor|docs|infra|setup|config|test|update|upgrade|bump|lint|format)' || true)
+
+          create_issue() {
+            local title="$1" labels="$2" commits="$3" points="$4"
+            local commit_list url num
+            commit_list=$(echo "$commits" | sed 's/^/- /')
+            url=$(gh issue create -R "$REPO" \
+              --title "$title" \
+              --label "$labels" \
+              --body "$(printf '## Summary\n%s\n\n## Commits\n%s\n\n## Story Points: %s\n**Implemented by:** Claude' \
+                "$title" "$commit_list" "$points")" \
+              2>&1 | tail -1)
+            num=$(echo "$url" | grep -oE '[0-9]+$')
+            gh issue close "$num" -R "$REPO" --reason completed
+            echo "  Closed #$num — $url"
+          }
+
+          RUN_DATE=$(date +%Y-%m-%d)
+          echo "=== Creating issues ==="
+          [ -n "$FEAT"  ] && create_issue "Feature work ($RUN_DATE)"                  "feature,claude,completed"        "$FEAT"  "5"
+          [ -n "$FIX"   ] && create_issue "Bug fixes ($RUN_DATE)"                     "bug,claude,completed"            "$FIX"   "3"
+          [ -n "$INFRA" ] && create_issue "Infrastructure & maintenance ($RUN_DATE)"  "infrastructure,claude,completed" "$INFRA" "3"
+          [ -n "$OTHER" ] && create_issue "Miscellaneous commits ($RUN_DATE)"         "feature,claude,completed"        "$OTHER" "2"
+
+          echo "Done — $REPO tracked through $RUN_DATE"
