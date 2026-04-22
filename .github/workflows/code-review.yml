@@ -1,0 +1,36 @@
+name: Claude Code Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  code-review:
+    name: Claude Code Review
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          direct_prompt: |
+            Review this pull request for code quality and correctness.
+
+            Focus on:
+            - Swift functional-first style: prefer structs over classes, immutable
+              let over var, map/filter/reduce over imperative loops, no force-unwrap
+              without justification, guard early returns
+            - No broad catch blocks, no hardcoded secrets
+            - No commented-out code, no TODO without an issue number
+            - Tests assert observable behavior, not implementation details
+
+            Post your review as inline comments on specific lines where possible.
+            Distinguish blocking issues from suggestions clearly.
+            Keep the review concise — flag real problems, not style nits.
